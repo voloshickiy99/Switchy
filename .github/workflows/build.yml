@@ -17,10 +17,57 @@ env:
 
 permissions:
   contents: write
+  security-events: write  # для CodeQL
 
 jobs:
-  build:
+  analyze:
+    name: CodeQL Analysis
     runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: cpp
+        queries: security-and-quality
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v1.0.2
+
+    - name: Build for CodeQL
+      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+  scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # Semgrep — статический анализ паттернов (SQL injection, buffer overflow и т.д.)
+    - name: Semgrep Scan
+      uses: semgrep/semgrep-action@v1
+      with:
+        config: >
+          p/c
+          p/security-audit
+          p/secrets
+
+    # Проверка на секреты (API ключи, пароли в коде)
+    - name: Gitleaks — scan for secrets
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build & Release
+    runs-on: windows-latest
+    needs: [analyze, scan]  # запускается только если проверки прошли
 
     steps:
     - uses: actions/checkout@v3
@@ -29,8 +76,14 @@ jobs:
       uses: microsoft/setup-msbuild@v1.0.2
 
     - name: Build
-      working-directory: ${{env.GITHUB_WORKSPACE}}
       run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
+
+    # Сканирование собранного бинарника через VirusTotal
+    - name: Scan binary with VirusTotal
+      uses: crazy-max/ghaction-virustotal@v4
+      with:
+        vt_api_key: ${{ secrets.VT_API_KEY }}
+        files: x64/Release/Switchy.exe
 
     - name: Get short SHA
       id: sha
